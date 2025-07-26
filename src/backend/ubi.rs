@@ -15,8 +15,8 @@ use itertools::Itertools;
 use regex::Regex;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::sync::OnceLock;
-use std::{env, sync::Arc};
 use std::{fmt::Debug, sync::LazyLock};
 use ubi::{ForgeType, UbiBuilder};
 use xx::regex;
@@ -121,6 +121,10 @@ impl Backend for UbiBackend {
                 ForgeType::GitLab => gitlab::API_URL,
             },
         };
+        let bin_path = opts
+            .get("bin_path")
+            .cloned()
+            .unwrap_or_else(|| "bin".to_string());
         let extract_all = opts.get("extract_all").is_some_and(|v| v == "true");
         let bin_dir = tv.install_path();
 
@@ -174,6 +178,10 @@ impl Backend for UbiBackend {
         {
             bin_file
         } else {
+            let mut bin_dir = bin_dir.to_path_buf();
+            if extract_all && bin_dir.join(&bin_path).exists() {
+                bin_dir = bin_dir.join(&bin_path);
+            }
             file::ls(&bin_dir)?
                 .into_iter()
                 .find(|f| {
@@ -216,27 +224,35 @@ impl Backend for UbiBackend {
         tv: &mut ToolVersion,
         file: &Path,
     ) -> eyre::Result<()> {
-        let mut checksum_key = file.file_name().unwrap().to_string_lossy().to_string();
+        // For ubi backend, generate a more specific platform key that includes tool-specific options
+        let mut platform_key = self.get_platform_key();
+        let filename = file.file_name().unwrap().to_string_lossy().to_string();
+
         if let Some(exe) = tv.request.options().get("exe") {
-            checksum_key = format!("{checksum_key}-{exe}");
+            platform_key = format!("{platform_key}-{exe}");
         }
         if let Some(matching) = tv.request.options().get("matching") {
-            checksum_key = format!("{checksum_key}-{matching}");
+            platform_key = format!("{platform_key}-{matching}");
         }
-        checksum_key = format!("{}-{}-{}", checksum_key, env::consts::OS, env::consts::ARCH);
-        if let Some(checksum) = &tv.checksums.get(&checksum_key) {
+        // Include filename to distinguish different downloads for the same platform
+        platform_key = format!("{platform_key}-{filename}");
+
+        // Get or create platform info for this platform key
+        let platform_info = tv.lock_platforms.entry(platform_key.clone()).or_default();
+
+        if let Some(checksum) = &platform_info.checksum {
             ctx.pr
-                .set_message(format!("checksum verify {checksum_key}"));
+                .set_message(format!("checksum verify {platform_key}"));
             if let Some((algo, check)) = checksum.split_once(':') {
                 hash::ensure_checksum(file, check, Some(&ctx.pr), algo)?;
             } else {
-                bail!("Invalid checksum: {checksum_key}");
+                bail!("Invalid checksum: {platform_key}");
             }
         } else if Settings::get().lockfile && Settings::get().experimental {
             ctx.pr
-                .set_message(format!("checksum generate {checksum_key}"));
-            let hash = hash::file_hash_sha256(file, Some(&ctx.pr))?;
-            tv.checksums.insert(checksum_key, format!("sha256:{hash}"));
+                .set_message(format!("checksum generate {platform_key}"));
+            let hash = hash::file_hash_blake3(file, Some(&ctx.pr))?;
+            platform_info.checksum = Some(format!("blake3:{hash}"));
         }
         Ok(())
     }
@@ -248,6 +264,7 @@ impl Backend for UbiBackend {
     ) -> eyre::Result<Vec<std::path::PathBuf>> {
         let opts = tv.request.options();
         if let Some(bin_path) = opts.get("bin_path") {
+            // bin_path should always point to a directory containing binaries
             Ok(vec![tv.install_path().join(bin_path)])
         } else if opts.get("extract_all").is_some_and(|v| v == "true") {
             Ok(vec![tv.install_path()])
@@ -334,6 +351,9 @@ async fn install(
     }
     if let Some(matching) = opts.get("matching") {
         builder = builder.matching(matching);
+    }
+    if let Some(matching_regex) = opts.get("matching_regex") {
+        builder = builder.matching_regex(matching_regex);
     }
 
     let forge = match opts.get("provider") {

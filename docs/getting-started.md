@@ -70,13 +70,14 @@ sudo apt update
 sudo apt install -y mise
 ```
 
-== Fedora (dnf)
+== Fedora 41+, RHEL/CentOS Stream 9+ (dnf)
 
 ```sh
-sudo dnf install -y dnf-plugins-core
-sudo dnf config-manager addrepo --from-repofile=https://mise.jdx.dev/rpm/mise.repo
-sudo dnf install -y mise
+sudo dnf copr enable jdxcode/mise
+sudo dnf install mise
 ```
+
+See the [copr page](https://copr.fedorainfracloud.org/coprs/jdxcode/mise/) for more information.
 
 :::
 
@@ -115,7 +116,7 @@ mise exec -- node my-script.js
 
 Another useful command is [`mise r|run`](/cli/run.html) which allows you to run a [`mise task`](/tasks/) or a script with the `mise` context.
 
-:::tip
+::: tip
 You can set a shell alias in your shell's rc file like `alias x="mise x --"` to save some keystrokes.
 :::
 
@@ -168,13 +169,20 @@ echo 'eval "$(mise activate zsh)"' >> ~/.zshrc
 
 == Windows
 
-::: code-group
-
-```powershell [powershell]
+```powershell
 $shimPath = "$env:USERPROFILE\AppData\Local\mise\shims"
 $currentPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $newPath = $currentPath + ";" + $shimPath
 [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+```
+
+In case you need to open your powershell profile:
+
+```powershell
+# create profile if it doesn't already exist
+if (-not (Test-Path $profile)) { New-Item $profile -Force }
+# open the profile
+Invoke-Item $profile
 ```
 
 - If not using powershell, add `<homedir>\AppData\Local\mise\shims` to `PATH`.

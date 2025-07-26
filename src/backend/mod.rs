@@ -36,15 +36,19 @@ use std::sync::LazyLock as Lazy;
 
 pub mod aqua;
 pub mod asdf;
+mod asset_detector;
 pub mod backend_type;
 pub mod cargo;
 pub mod dotnet;
 mod external_plugin_cache;
 pub mod gem;
+pub mod github;
 pub mod go;
+pub mod http;
 pub mod npm;
 pub mod pipx;
 pub mod spm;
+pub mod static_helpers;
 pub mod ubi;
 pub mod vfox;
 
@@ -153,11 +157,18 @@ pub fn arg_to_backend(ba: BackendArg) -> Option<ABackend> {
         BackendType::Dotnet => Some(Arc::new(dotnet::DotnetBackend::from_arg(ba))),
         BackendType::Npm => Some(Arc::new(npm::NPMBackend::from_arg(ba))),
         BackendType::Gem => Some(Arc::new(gem::GemBackend::from_arg(ba))),
+        BackendType::Github => Some(Arc::new(github::UnifiedGitBackend::from_arg(ba))),
+        BackendType::Gitlab => Some(Arc::new(github::UnifiedGitBackend::from_arg(ba))),
         BackendType::Go => Some(Arc::new(go::GoBackend::from_arg(ba))),
         BackendType::Pipx => Some(Arc::new(pipx::PIPXBackend::from_arg(ba))),
         BackendType::Spm => Some(Arc::new(spm::SPMBackend::from_arg(ba))),
+        BackendType::Http => Some(Arc::new(http::HttpBackend::from_arg(ba))),
         BackendType::Ubi => Some(Arc::new(ubi::UbiBackend::from_arg(ba))),
-        BackendType::Vfox => Some(Arc::new(vfox::VfoxBackend::from_arg(ba))),
+        BackendType::Vfox => Some(Arc::new(vfox::VfoxBackend::from_arg(ba, None))),
+        BackendType::VfoxBackend(plugin_name) => Some(Arc::new(vfox::VfoxBackend::from_arg(
+            ba,
+            Some(plugin_name.to_string()),
+        ))),
         BackendType::Unknown => None,
     }
 }
@@ -174,6 +185,16 @@ pub trait Backend: Debug + Send + Sync {
         BackendType::Core
     }
     fn ba(&self) -> &Arc<BackendArg>;
+
+    /// Generates a platform key for lockfile storage.
+    /// Default implementation uses os-arch format, but backends can override for more specific keys.
+    fn get_platform_key(&self) -> String {
+        let settings = Settings::get();
+        let os = settings.os();
+        let arch = settings.arch();
+        format!("{os}-{arch}")
+    }
+
     async fn description(&self) -> Option<String> {
         None
     }
@@ -246,7 +267,7 @@ pub trait Backend: Debug + Send + Sync {
                         }
                     })
                     .collect_vec();
-                if versions.is_empty() {
+                if versions.is_empty() && self.get_type() != BackendType::Http {
                     warn!("No versions found for {id}");
                 }
                 Ok(versions)
@@ -494,6 +515,7 @@ pub trait Backend: Debug + Send + Sync {
     ) -> eyre::Result<()> {
         CmdLineRunner::new(&*env::SHELL)
             .env(&*env::PATH_KEY, plugins::core::path_env_with_tv_path(tv)?)
+            .env("MISE_TOOL_INSTALL_PATH", tv.install_path())
             .with_pr(&ctx.pr)
             .arg("-c")
             .arg(script)
@@ -721,18 +743,45 @@ pub trait Backend: Debug + Send + Sync {
         tv: &mut ToolVersion,
         file: &Path,
     ) -> Result<()> {
+        let settings = Settings::get();
         let filename = file.file_name().unwrap().to_string_lossy().to_string();
-        if let Some(checksum) = &tv.checksums.get(&filename) {
+        let lockfile_enabled = settings.lockfile && settings.experimental;
+
+        // Get the platform key for this tool and platform
+        let platform_key = self.get_platform_key();
+
+        // Get or create asset info for this platform
+        let platform_info = tv.lock_platforms.entry(platform_key.clone()).or_default();
+
+        if let Some(checksum) = &platform_info.checksum {
             ctx.pr.set_message(format!("checksum {filename}"));
             if let Some((algo, check)) = checksum.split_once(':') {
                 hash::ensure_checksum(file, check, Some(&ctx.pr), algo)?;
             } else {
                 bail!("Invalid checksum: {checksum}");
             }
-        } else if Settings::get().lockfile && Settings::get().experimental {
+        } else if lockfile_enabled {
             ctx.pr.set_message(format!("generate checksum {filename}"));
-            let hash = hash::file_hash_sha256(file, Some(&ctx.pr))?;
-            tv.checksums.insert(filename, format!("sha256:{hash}"));
+            let hash = hash::file_hash_blake3(file, Some(&ctx.pr))?;
+            platform_info.checksum = Some(format!("blake3:{hash}"));
+        }
+
+        // Handle size verification and generation
+        if let Some(expected_size) = platform_info.size {
+            ctx.pr.set_message(format!("verify size {filename}"));
+            let actual_size = file.metadata()?.len();
+            if actual_size != expected_size {
+                bail!(
+                    "Size mismatch for {}: expected {}, got {}",
+                    filename,
+                    expected_size,
+                    actual_size
+                );
+            }
+        } else if lockfile_enabled {
+            ctx.pr.set_message(format!("record size {filename}"));
+            let size = file.metadata()?.len();
+            platform_info.size = Some(size);
         }
         Ok(())
     }

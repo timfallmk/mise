@@ -19,6 +19,35 @@ curl https://mise.run | sh
 curl https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh
 ```
 
+#### Shell-specific installation + activation
+
+For a more streamlined setup, you can use shell-specific endpoints that will install mise and automatically configure activation in your shell's configuration file:
+
+::: code-group
+
+```sh [zsh]
+curl https://mise.run/zsh | sh
+# Installs mise and adds activation to ~/.zshrc
+```
+
+```sh [bash]
+curl https://mise.run/bash | sh
+# Installs mise and adds activation to ~/.bashrc
+```
+
+```sh [fish]
+curl https://mise.run/fish | sh
+# Installs mise and adds activation to ~/.config/fish/config.fish
+```
+
+:::
+
+These shell-specific installers will:
+- Install mise using the same logic as the main installer
+- Automatically detect your shell's configuration file
+- Add the activation line if it's not already present
+- Skip adding activation if it's already configured (safe to run multiple times)
+
 Options:
 
 - `MISE_DEBUG=1` – enable debug logging
@@ -40,34 +69,6 @@ As long as you don't change the version with `MISE_VERSION`, the install script 
 version was when it was downloaded with checksums inside the file. This makes downloading the file and putting it into
 a project a great way to ensure that anyone installing with that script fetches the exact same mise bin.
 :::
-
-or if you're allergic to `| sh`:
-
-::: code-group
-
-```sh [macos-arm64]
-curl https://mise.jdx.dev/mise-latest-macos-arm64 > ~/.local/bin/mise
-chmod +x ~/.local/bin/mise
-```
-
-```sh [macos-x64]
-curl https://mise.jdx.dev/mise-latest-macos-x64 > ~/.local/bin/mise
-chmod +x ~/.local/bin/mise
-```
-
-```sh [linux-x64]
-curl https://mise.jdx.dev/mise-latest-linux-x64 > ~/.local/bin/mise
-chmod +x ~/.local/bin/mise
-```
-
-```sh [linux-arm64]
-curl https://mise.jdx.dev/mise-latest-linux-arm64 > ~/.local/bin/mise
-chmod +x ~/.local/bin/mise
-```
-
-:::
-
-It doesn't matter where you put it. So use `~/bin`, `/usr/local/bin`, `~/.local/bin` or whatever.
 
 Supported os/arch:
 
@@ -152,24 +153,12 @@ cargo install mise --git https://github.com/jdx/mise --branch main
 
 ### dnf
 
-For Fedora 40, CentOS, Amazon Linux, RHEL and other dnf-based distributions:
+#### Fedora 41+, RHEL 9+, CentOS Stream 9+
 
 ```sh
-dnf install -y dnf-plugins-core
-dnf config-manager --add-repo https://mise.jdx.dev/rpm/mise.repo
-dnf install -y mise
+dnf copr enable jdxcode/mise
+dnf install mise
 ```
-
-Fedora 41+ (dnf5)
-
-```sh
-dnf install -y dnf-plugins-core
-dnf config-manager addrepo --from-repofile=https://mise.jdx.dev/rpm/mise.repo
-dnf install -y mise
-```
-
-> [!NOTE]
-> This repository maintains only the latest version of the mise CLI. Previous versions are removed and are not available once a new release is made.
 
 ### Docker
 
@@ -225,7 +214,7 @@ You can also import the package directly using
 `mise-flake.packages.${system}.mise`. It supports all default Nix
 systems.
 
-### yum
+### yum (RHEL 8, CentOS Stream 8, Amazon Linux 2)
 
 ```sh
 yum install -y yum-utils

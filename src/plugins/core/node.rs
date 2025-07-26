@@ -101,7 +101,11 @@ impl NodePlugin {
         let tarball_name = &opts.binary_tarball_name;
         ctx.pr.set_message(format!("extract {tarball_name}"));
         let tmp_extract_path = tempdir_in(opts.install_path.parent().unwrap())?;
-        file::unzip(&opts.binary_tarball_path, tmp_extract_path.path())?;
+        file::unzip(
+            &opts.binary_tarball_path,
+            tmp_extract_path.path(),
+            &Default::default(),
+        )?;
         file::remove_all(&opts.install_path)?;
         file::rename(
             tmp_extract_path.path().join(slug(&opts.version)),
@@ -159,9 +163,13 @@ impl NodePlugin {
             pr.set_message(format!("download {tarball_name}"));
             HTTP.download_file(url.clone(), local, Some(pr)).await?;
         }
-        if *env::MISE_NODE_VERIFY && !tv.checksums.contains_key(&tarball_name) {
-            tv.checksums
-                .insert(tarball_name, self.get_checksum(ctx, local, version).await?);
+        let platform_info = tv
+            .lock_platforms
+            .entry(self.get_platform_key())
+            .or_default();
+        platform_info.url = Some(url.to_string());
+        if *env::MISE_NODE_VERIFY && platform_info.checksum.is_none() {
+            platform_info.checksum = Some(self.get_checksum(ctx, local, version).await?);
         }
         self.verify_checksum(ctx, tv, local)?;
         Ok(())
@@ -595,7 +603,7 @@ fn arch(settings: &Settings) -> &str {
     let arch = settings.arch();
     if arch == "x86" {
         "x86"
-    } else if arch == "x86_64" {
+    } else if arch == "x64" {
         "x64"
     } else if arch == "arm" {
         if cfg!(target_feature = "v6") {

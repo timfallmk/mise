@@ -12,7 +12,7 @@ use itertools::Itertools;
 use serde::ser::Error;
 use serde::{Deserialize, Deserializer};
 use serde_derive::Serialize;
-use std::env::consts::ARCH;
+use std::env::consts::{ARCH, OS};
 use std::fmt::{Debug, Display, Formatter};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -252,13 +252,15 @@ impl Settings {
 
     pub fn add_cli_matches(cli: &Cli) {
         let mut s = SettingsPartial::empty();
-        for arg in &*env::ARGS.read().unwrap() {
-            if arg == "--" {
-                break;
-            }
-            if arg == "--raw" {
-                s.raw = Some(true);
-            }
+
+        // Don't process mise-specific flags when running as a shim
+        if *crate::env::IS_RUNNING_AS_SHIM {
+            Self::reset(Some(s));
+            return;
+        }
+
+        if cli.raw {
+            s.raw = Some(true);
         }
         if let Some(cd) = &cli.cd {
             s.cd = Some(cd.clone());
@@ -448,18 +450,32 @@ impl Settings {
         Ok(shell_words::split(sa)?)
     }
 
+    pub fn os(&self) -> &str {
+        match self.os.as_deref().unwrap_or(OS) {
+            "darwin" | "macos" => "macos",
+            "linux" => "linux",
+            "windows" => "windows",
+            other => other,
+        }
+    }
+
     pub fn arch(&self) -> &str {
-        self.arch.as_deref().unwrap_or(ARCH)
+        match self.arch.as_deref().unwrap_or(ARCH) {
+            "x86_64" | "amd64" => "x64",
+            "aarch64" | "arm64" => "arm64",
+            other => other,
+        }
     }
 
     pub fn no_config() -> bool {
         *env::MISE_NO_CONFIG
-            || env::ARGS
-                .read()
-                .unwrap()
-                .iter()
-                .take_while(|a| *a != "--")
-                .any(|a| a == "--no-config")
+            || !*crate::env::IS_RUNNING_AS_SHIM
+                && env::ARGS
+                    .read()
+                    .unwrap()
+                    .iter()
+                    .take_while(|a| *a != "--")
+                    .any(|a| a == "--no-config")
     }
 }
 

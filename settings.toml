@@ -149,6 +149,7 @@ env = "MISE_AUTO_INSTALL_DISABLE_TOOLS"
 type = "ListString"
 rust_type = "Vec<String>"
 optional = true
+parse_env = "list_by_comma"
 description = "List of tools to skip automatically installing when running `mise x`, `mise run`, or as part of the 'not found' handler."
 
 [cache_prune_age]
@@ -624,6 +625,10 @@ description = "Set to false to disable the \"command not found\" handler to auto
 docs = """
 Set to false to disable the "command not found" handler to autoinstall missing tool versions.
 Disable this if experiencing strange behavior in your shell when a command is not found.
+
+**Important limitation**: This handler only installs missing versions of tools that already have 
+at least one version installed. mise cannot determine which tool provides a binary without having 
+the tool installed first, so it cannot auto-install completely new tools.
 
 This also runs in shims if the terminal is interactive.
 """
@@ -1187,6 +1192,10 @@ Set to "false" to disable using [mise-versions](https://mise-versions.jdx.dev) a
 a quick way for mise to query for new versions. This host regularly grabs all the
 latest versions of core and community plugins. It's faster than running a plugin's
 `list-all` command and gets around GitHub rate limiting problems when using it.
+
+mise-versions itself also struggles with rate limits but you can help it to fetch more frequently by authenticating
+with its [GitHub app](https://github.com/apps/mise-versions). It does not require any permissions since it simply
+fetches public repository information.
 
 See [Troubleshooting](/troubleshooting.html#new-version-of-a-tool-is-not-available) for more information.
 """

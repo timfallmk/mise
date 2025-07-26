@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use crate::backend::backend_type::BackendType;
 use crate::build_time::built_info;
+use crate::cli::self_update::SelfUpdate;
 use crate::cli::version;
 use crate::cli::version::VERSION;
 use crate::config::{Config, IGNORED_CONFIG_FILES};
@@ -65,6 +66,10 @@ impl Doctor {
         );
         data.insert("activated".into(), env::is_activated().into());
         data.insert("shims_on_path".into(), shims_on_path().into());
+        data.insert(
+            "self_update_available".into(),
+            SelfUpdate::is_available().into(),
+        );
         if env::is_activated() && shims_on_path() {
             self.errors.push("shims are on PATH and mise is also activated. You should only use one of these methods.".to_string());
         }
@@ -75,6 +80,7 @@ impl Doctor {
                 .map(|(k, v)| (k.to_snake_case(), v))
                 .collect(),
         );
+
         let shell = shell();
         let mut shell_lines = shell.lines();
         let mut shell = serde_json::Map::new();
@@ -92,6 +98,12 @@ impl Doctor {
                 .map(|(k, p)| (k, p.to_string_lossy().to_string()))
                 .collect(),
         );
+        let mut aqua = serde_json::Map::new();
+        aqua.insert(
+            "baked_in_registry_tools".into(),
+            aqua_registry_count().into(),
+        );
+        data.insert("aqua".into(), aqua.into());
         data.insert("env_vars".into(), mise_env_vars().into_iter().collect());
         data.insert(
             "settings".into(),
@@ -174,6 +186,7 @@ impl Doctor {
         #[cfg(unix)]
         info::inline_section("activated", yn(env::is_activated()))?;
         info::inline_section("shims_on_path", yn(shims_on_path()))?;
+        info::inline_section("self_update_available", yn(SelfUpdate::is_available()))?;
         if env::is_activated() && shims_on_path() {
             self.errors.push("shims are on PATH and mise is also activated. You should only use one of these methods.".to_string());
         }
@@ -184,6 +197,8 @@ impl Doctor {
             .join("\n");
         info::section("build_info", build_info)?;
         info::section("shell", shell())?;
+        info::section("aqua", aqua_registry_count_str())?;
+
         let mise_dirs = mise_dirs()
             .into_iter()
             .map(|(k, p)| format!("{k}: {}", display_path(p)))
@@ -210,7 +225,7 @@ impl Doctor {
 
         if let Some(latest) = version::check_for_new_version(duration::HOURLY).await {
             version::show_latest().await;
-            self.errors.push(format!(
+            self.warnings.push(format!(
                 "new mise version {latest} available, currently on {}",
                 *version::V
             ));
@@ -483,7 +498,7 @@ fn render_plugins() -> String {
             let p = p.plugin().unwrap();
             let padded_name = pad_str(p.name(), max_plugin_name_len, Alignment::Left, None);
             let extra = match p {
-                PluginEnum::Asdf(_) | PluginEnum::Vfox(_) => {
+                PluginEnum::Asdf(_) | PluginEnum::Vfox(_) | PluginEnum::VfoxBackend(_) => {
                     let git = Git::new(dirs::PLUGINS.join(p.name()));
                     match git.get_remote_url() {
                         Some(url) => {
@@ -526,6 +541,19 @@ fn shell() -> String {
             format!("{shell_cmd}\n{version}")
         }
         None => "(unknown)".to_string(),
+    }
+}
+
+fn aqua_registry_count() -> usize {
+    crate::aqua::aqua_registry::AQUA_STANDARD_REGISTRY_FILES.len()
+}
+
+fn aqua_registry_count_str() -> String {
+    let aqua_count = aqua_registry_count();
+    if aqua_count > 0 {
+        format!("baked in registry tools: {aqua_count}")
+    } else {
+        "baked in registry tools: 0 – aqua registry tools are not compiled into mise, will be fetched dynamically from https://mise-versions.jdx.dev".to_string()
     }
 }
 

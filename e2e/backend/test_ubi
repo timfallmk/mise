@@ -7,8 +7,8 @@ assert_contains "$MISE_DATA_DIR/shims/jc --version" "jc version:  1.25.3"
 
 # only run on linux/amd64
 if [ "$(uname -m)" = "x86_64" ] && [ "$(uname -s)" = "Linux" ]; then
-  mise use 'ubi:https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz[exe=ffmpeg]'
-  assert_contains "$MISE_DATA_DIR/shims/ffmpeg -version" "ffmpeg version"
+	mise use 'ubi:https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz[exe=ffmpeg]'
+	assert_contains "$MISE_DATA_DIR/shims/ffmpeg -version" "ffmpeg version"
 fi
 
 cat <<EOF >mise.toml
@@ -28,6 +28,13 @@ cat <<EOF >mise.toml
 EOF
 mise use ubi:gitlab-org/cli@1.55.0
 assert "mise x ubi:gitlab-org/cli@1.55.0 -- glab --version | grep -o 1.55.0" "1.55.0"
+
+cat <<EOF >mise.toml
+[tools]
+"ubi:kscripting/kscript" = { version = "4.2.3", bin_path = "bin", extract_all = "true" }
+EOF
+mise use ubi:kscripting/kscript@4.2.3
+assert_contains "mise x ubi:kscripting/kscript@4.2.3 -- which kscript" "/4.2.3/bin/kscript"
 
 MISE_USE_VERSIONS_HOST=0 assert_not_contains "mise ls-remote cargo-binstall" "binstalk"
 

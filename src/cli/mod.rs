@@ -36,6 +36,7 @@ mod install_into;
 mod latest;
 mod link;
 mod local;
+mod lock;
 mod ls;
 mod ls_remote;
 mod outdated;
@@ -188,7 +189,7 @@ pub struct CliGlobalOutputFlags {
 #[strum(serialize_all = "kebab-case")]
 pub enum Commands {
     Activate(activate::Activate),
-    Alias(alias::Alias),
+    Alias(Box<alias::Alias>),
     Asdf(asdf::Asdf),
     Backends(backends::Backends),
     BinPaths(bin_paths::BinPaths),
@@ -213,6 +214,7 @@ pub enum Commands {
     Latest(latest::Latest),
     Link(link::Link),
     Local(local::Local),
+    Lock(lock::Lock),
     Ls(ls::Ls),
     LsRemote(ls_remote::LsRemote),
     Outdated(outdated::Outdated),
@@ -279,6 +281,7 @@ impl Commands {
             Self::Latest(cmd) => cmd.run().await,
             Self::Link(cmd) => cmd.run().await,
             Self::Local(cmd) => cmd.run().await,
+            Self::Lock(cmd) => cmd.run().await,
             Self::Ls(cmd) => cmd.run().await,
             Self::LsRemote(cmd) => cmd.run().await,
             Self::Outdated(cmd) => cmd.run().await,

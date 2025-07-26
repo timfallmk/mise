@@ -2,7 +2,7 @@
 
 You may install GitHub Releases and URL packages directly using [ubi](https://github.com/houseabsolute/ubi) backend. ubi is directly compiled into
 the mise codebase so it does not need to be installed separately to be used. ubi is preferred over
-asdf/vfox for new tools since it doesn't require a plugin, supports Windows, and is really easy to use.
+plugins for new tools since it doesn't require a plugin, supports Windows, and is really easy to use.
 
 ubi doesn't require plugins or even any configuration for each tool. What it does is try to deduce what
 the proper binary/tarball is from GitHub releases and downloads the right one. As long as the vendor
@@ -69,6 +69,17 @@ then this will be ignored.
 "ubi:BurntSushi/ripgrep" = { version = "latest", matching = "musl" }
 ```
 
+### `matching_regex`
+
+Set a regular expression string that will be matched against release filenames before matching
+against OS/arch. If the pattern yields a single match, that release will be selected. If no matches
+are found, this will result in an error.
+
+```toml
+[tools]
+"ubi:shader-slang/slang" = { version = "latest", matching_regex = "\\d+\\.tar" }
+```
+
 ### `provider`
 
 Set the provider type to use for fetching assets and release information. Either `github` or `gitlab` (default is `github`).
@@ -108,6 +119,13 @@ This only makes sense when `extract_all` is set to `true`.
 "ubi:BurntSushi/ripgrep" = { version = "latest", extract_all = "true", bin_path = "target/release" }
 ```
 
+**Binary path lookup order:**
+
+1. If `bin_path` is specified, use that directory
+2. If `extract_all` is set to `true`, use the install path root
+3. If `bin_path` is not set, look for a `bin/` directory in the install path
+4. If no `bin/` directory exists, use the root of the extracted directory
+
 ### `tag_regex`
 
 Set a regex to filter out tags that don't match the regex. This is useful when a vendor has a bunch of
@@ -117,7 +135,7 @@ releases.
 
 ```toml
 [tools]
-"ubi:cargo-bins/cargo-binstall" = { version = "latest", tag_regex = "^\d+\." }
+"ubi:cargo-bins/cargo-binstall" = { version = "latest", tag_regex = '^\d+\.' }
 ```
 
 ## Self-hosted GitHub/GitLab

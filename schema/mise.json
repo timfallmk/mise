@@ -1,6 +1,6 @@
 {
   "$id": "https://mise.jdx.dev/schema/mise.json",
-  "$schema": "http://json-schema.org/2019-09/schema#",
+  "$schema": "https://json-schema.org/draft/2019-09/schema#",
   "title": "mise",
   "type": "object",
   "$defs": {
@@ -1394,6 +1394,26 @@
                   "type": "boolean"
                 }
               ]
+            },
+            "install_env": {
+              "additionalProperties": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "description": "environment variables during tool installation"
+            },
+            "postinstall": {
+              "description": "command to run after tool installation",
+              "type": "string"
             }
           },
           "required": ["version"],
@@ -1402,6 +1422,16 @@
             "oneOf": [
               {
                 "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "object",
+                "additionalProperties": true
               }
             ]
           }

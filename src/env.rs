@@ -76,6 +76,17 @@ pub static XDG_STATE_HOME: Lazy<PathBuf> =
 /// always display "friendly" errors even in debug mode
 pub static MISE_FRIENDLY_ERROR: Lazy<bool> = Lazy::new(|| var_is_true("MISE_FRIENDLY_ERROR"));
 pub static MISE_NO_CONFIG: Lazy<bool> = Lazy::new(|| var_is_true("MISE_NO_CONFIG"));
+/// true if RUST_BACKTRACE is set (enables detailed error tracebacks)
+pub static RUST_BACKTRACE: Lazy<bool> = Lazy::new(|| {
+    match var("RUST_BACKTRACE") {
+        Ok(v) => {
+            let v = v.to_lowercase();
+            // RUST_BACKTRACE accepts "1" and "full" as valid values
+            v == "1" || v == "full"
+        }
+        Err(_) => false,
+    }
+});
 pub static MISE_CACHE_DIR: Lazy<PathBuf> =
     Lazy::new(|| var_path("MISE_CACHE_DIR").unwrap_or_else(|| XDG_CACHE_HOME.join("mise")));
 pub static MISE_CONFIG_DIR: Lazy<PathBuf> =
@@ -158,6 +169,22 @@ pub static __USAGE: Lazy<Option<String>> = Lazy::new(|| var("__USAGE").ok());
 // true if running inside a shim
 pub static __MISE_SHIM: Lazy<bool> = Lazy::new(|| var_is_true("__MISE_SHIM"));
 
+// true if the current process is running as a shim (not direct mise invocation)
+pub static IS_RUNNING_AS_SHIM: Lazy<bool> = Lazy::new(|| {
+    // When running tests, always treat as direct mise invocation
+    // to avoid interfering with test expectations
+    if cfg!(test) {
+        return false;
+    }
+
+    #[cfg(unix)]
+    let mise_bin = "mise";
+    #[cfg(windows)]
+    let mise_bin = "mise.exe";
+    let bin_name = *MISE_BIN_NAME;
+    bin_name != mise_bin && !bin_name.starts_with("mise-")
+});
+
 #[cfg(test)]
 pub static TERM_WIDTH: Lazy<usize> = Lazy::new(|| 80);
 
@@ -204,63 +231,15 @@ pub static PATH_NON_PRISTINE: Lazy<Vec<PathBuf>> = Lazy::new(|| match var(&*PATH
     Err(_) => vec![],
 });
 pub static DIRENV_DIFF: Lazy<Option<String>> = Lazy::new(|| var("DIRENV_DIFF").ok());
-pub static GITHUB_TOKEN: Lazy<Option<String>> = Lazy::new(|| {
-    let token = var("MISE_GITHUB_TOKEN")
-        .or_else(|_| var("GITHUB_API_TOKEN"))
-        .or_else(|_| var("GITHUB_TOKEN"))
-        .ok()
-        .and_then(|v| if v.is_empty() { None } else { Some(v) });
 
-    // set or unset the token for plugins+ubi
-    if let Some(token) = token.as_ref() {
-        set_var("MISE_GITHUB_TOKEN", token);
-        set_var("GITHUB_TOKEN", token);
-        set_var("GITHUB_API_TOKEN", token);
-    } else {
-        remove_var("MISE_GITHUB_TOKEN");
-        remove_var("GITHUB_TOKEN");
-        remove_var("GITHUB_API_TOKEN");
-    }
-
-    token
-});
+pub static GITHUB_TOKEN: Lazy<Option<String>> =
+    Lazy::new(|| get_token(&["MISE_GITHUB_TOKEN", "GITHUB_API_TOKEN", "GITHUB_TOKEN"]));
 pub static MISE_GITHUB_ENTERPRISE_TOKEN: Lazy<Option<String>> =
-    Lazy::new(|| match var("MISE_GITHUB_ENTERPRISE_TOKEN") {
-        Ok(v) if v.trim() != "" => {
-            set_var("MISE_GITHUB_ENTERPRISE_TOKEN", &v);
-            Some(v)
-        }
-        _ => {
-            remove_var("MISE_GITHUB_ENTERPRISE_TOKEN");
-            None
-        }
-    });
+    Lazy::new(|| get_token(&["MISE_GITHUB_ENTERPRISE_TOKEN"]));
 pub static GITLAB_TOKEN: Lazy<Option<String>> =
-    Lazy::new(
-        || match var("MISE_GITLAB_TOKEN").or_else(|_| var("GITLAB_TOKEN")) {
-            Ok(v) if v.trim() != "" => {
-                set_var("MISE_GITLAB_TOKEN", &v);
-                set_var("GITLAB_TOKEN", &v);
-                Some(v)
-            }
-            _ => {
-                remove_var("MISE_GITLAB_TOKEN");
-                remove_var("GITLAB_TOKEN");
-                None
-            }
-        },
-    );
+    Lazy::new(|| get_token(&["MISE_GITLAB_TOKEN", "GITLAB_TOKEN"]));
 pub static MISE_GITLAB_ENTERPRISE_TOKEN: Lazy<Option<String>> =
-    Lazy::new(|| match var("MISE_GITLAB_ENTERPRISE_TOKEN") {
-        Ok(v) if v.trim() != "" => {
-            set_var("MISE_GITLAB_ENTERPRISE_TOKEN", &v);
-            Some(v)
-        }
-        _ => {
-            remove_var("MISE_GITLAB_ENTERPRISE_TOKEN");
-            None
-        }
-    });
+    Lazy::new(|| get_token(&["MISE_GITLAB_ENTERPRISE_TOKEN"]));
 
 pub static TEST_TRANCHE: Lazy<usize> = Lazy::new(|| var_u8("TEST_TRANCHE") as usize);
 pub static TEST_TRANCHE_COUNT: Lazy<usize> = Lazy::new(|| var_u8("TEST_TRANCHE_COUNT") as usize);
@@ -492,23 +471,30 @@ fn prefer_offline(args: &[String]) -> bool {
 fn environment(args: &[String]) -> Vec<String> {
     let arg_defs = HashSet::from(["--profile", "-P", "--env", "-E"]);
 
-    args.windows(2)
-        .take_while(|window| !window.iter().any(|a| a == "--"))
-        .find_map(|window| {
-            if arg_defs.contains(&*window[0]) {
-                Some(window[1].clone())
-            } else {
-                None
-            }
-        })
-        .or_else(|| var("MISE_ENV").ok())
-        .or_else(|| var("MISE_PROFILE").ok())
-        .or_else(|| var("MISE_ENVIRONMENT").ok())
-        .unwrap_or_default()
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect()
+    // Get environment value from args or env vars
+    if *IS_RUNNING_AS_SHIM {
+        // When running as shim, ignore command line args and use env vars only
+        None
+    } else {
+        // Try to get from command line args first
+        args.windows(2)
+            .take_while(|window| !window.iter().any(|a| a == "--"))
+            .find_map(|window| {
+                if arg_defs.contains(&*window[0]) {
+                    Some(window[1].clone())
+                } else {
+                    None
+                }
+            })
+    }
+    .or_else(|| var("MISE_ENV").ok())
+    .or_else(|| var("MISE_PROFILE").ok())
+    .or_else(|| var("MISE_ENVIRONMENT").ok())
+    .unwrap_or_default()
+    .split(',')
+    .filter(|s| !s.is_empty())
+    .map(String::from)
+    .collect()
 }
 
 fn log_file_level() -> Option<LevelFilter> {
@@ -527,6 +513,12 @@ fn filename(path: &str) -> &str {
     path.rsplit_once(path::MAIN_SEPARATOR_STR)
         .map(|(_, file)| file)
         .unwrap_or(path)
+}
+
+fn get_token(keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| var(key).ok())
+        .and_then(|v| if v.trim().is_empty() { None } else { Some(v) })
 }
 
 fn is_ninja_on_path() -> bool {
@@ -599,5 +591,29 @@ mod tests {
             PathBuf::from("/foo/bar")
         );
         remove_var("MISE_TEST_PATH");
+    }
+
+    #[test]
+    fn test_token_overwrite() {
+        // Clean up any existing environment variables that might interfere
+        remove_var("MISE_GITHUB_TOKEN");
+        remove_var("GITHUB_TOKEN");
+        remove_var("GITHUB_API_TOKEN");
+
+        set_var("MISE_GITHUB_TOKEN", "");
+        set_var("GITHUB_TOKEN", "invalid_token");
+        assert_eq!(
+            get_token(&["MISE_GITHUB_TOKEN", "GITHUB_TOKEN"]),
+            None,
+            "Empty token should overwrite other tokens"
+        );
+        assert_eq!(
+            get_token(&["GITHUB_API_TOKEN", "GITHUB_TOKEN"]),
+            Some("invalid_token".into()),
+            "Unset token should not overwrite other tokens"
+        );
+        remove_var("MISE_GITHUB_TOKEN");
+        remove_var("GITHUB_TOKEN");
+        remove_var("GITHUB_API_TOKEN");
     }
 }

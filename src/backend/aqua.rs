@@ -31,6 +31,7 @@ use std::{collections::HashSet, sync::Arc};
 pub struct AquaBackend {
     ba: Arc<BackendArg>,
     id: String,
+    version_tags_cache: CacheManager<Vec<(String, String)>>,
     bin_path_caches: DashMap<String, CacheManager<Vec<PathBuf>>>,
 }
 
@@ -57,37 +58,18 @@ impl Backend for AquaBackend {
     }
 
     async fn _list_remote_versions(&self, _config: &Arc<Config>) -> Result<Vec<String>> {
-        let pkg = AQUA_REGISTRY.package(&self.id).await?;
-        if !pkg.repo_owner.is_empty() && !pkg.repo_name.is_empty() {
-            let versions = get_versions(&pkg).await?;
-            Ok(versions
-                .into_iter()
-                .filter_map(|v| {
-                    let mut v = v.as_str();
-                    match pkg.version_filter_ok(v) {
-                        Ok(true) => {}
-                        Ok(false) => return None,
-                        Err(e) => {
-                            warn!("[{}] aqua version filter error: {e}", self.ba);
-                        }
-                    }
-                    let pkg = pkg.clone().with_version(v);
-                    if let Some(prefix) = &pkg.version_prefix {
-                        if let Some(_v) = v.strip_prefix(prefix) {
-                            v = _v
-                        } else {
-                            return None;
-                        }
-                    }
-                    v = v.strip_prefix('v').unwrap_or(v);
-                    Some(v.to_string())
-                })
-                .rev()
-                .collect())
-        } else {
-            warn!("no aqua registry found for {}", self.ba);
-            Ok(vec![])
+        let version_tags = self.get_version_tags().await?;
+        let mut versions = Vec::new();
+        for (v, tag) in version_tags.iter() {
+            let pkg = AQUA_REGISTRY
+                .package_with_version(&self.id, &[tag])
+                .await
+                .unwrap_or_default();
+            if !pkg.no_asset && pkg.error_message.is_none() {
+                versions.push(v.clone());
+            }
         }
+        Ok(versions)
     }
 
     async fn install_version_(
@@ -95,29 +77,75 @@ impl Backend for AquaBackend {
         ctx: &InstallContext,
         mut tv: ToolVersion,
     ) -> Result<ToolVersion> {
-        let mut v = format!("v{}", tv.version);
-        let pkg = AQUA_REGISTRY.package_with_version(&self.id, &v).await?;
+        let tag = self
+            .get_version_tags()
+            .await?
+            .iter()
+            .find(|(version, _)| version == &tv.version)
+            .map(|(_, tag)| tag);
+        let mut v = tag.cloned().unwrap_or_else(|| tv.version.clone());
+        let mut v_prefixed =
+            (tag.is_none() && !tv.version.starts_with('v')).then(|| format!("v{v}"));
+        let versions = match &v_prefixed {
+            Some(v_prefixed) => vec![v.as_str(), v_prefixed.as_str()],
+            None => vec![v.as_str()],
+        };
+        let pkg = AQUA_REGISTRY
+            .package_with_version(&self.id, &versions)
+            .await?;
         if let Some(prefix) = &pkg.version_prefix {
-            v = format!("{prefix}{v}");
+            if !v.starts_with(prefix) {
+                v = format!("{prefix}{v}");
+                v_prefixed = v_prefixed.map(|v| format!("{prefix}{v}"));
+            }
         }
         validate(&pkg)?;
-        let url = match self.fetch_url(&pkg, &v).await {
-            Ok(url) => url,
-            Err(err) => {
-                if let Some(prefix) = &pkg.version_prefix {
-                    v = format!("{}{}", prefix, tv.version);
-                } else {
-                    v = tv.version.to_string();
-                }
-                self.fetch_url(&pkg, &v)
-                    .await
-                    .map_err(|e| err.wrap_err(e))?
-            }
+
+        // Check if URL already exists in lockfile platforms first
+        let platform_key = self.get_platform_key();
+        let (url, v, filename) = if let Some(existing_platform) = tv
+            .lock_platforms
+            .get(&platform_key)
+            .and_then(|asset| asset.url.clone())
+        {
+            let url = existing_platform;
+            let filename = url.split('/').next_back().unwrap_or("download").to_string();
+            // Determine which version variant was used based on the URL or filename
+            let v = if url.contains(&format!("v{}", tv.version))
+                || filename.contains(&format!("v{}", tv.version))
+            {
+                format!("v{}", tv.version)
+            } else {
+                tv.version.clone()
+            };
+            (url, v, filename)
+        } else {
+            // try v-prefixed version first because most aqua packages use v-prefixed versions
+            let (url, v) = match self
+                .fetch_url(&pkg, v_prefixed.as_ref().unwrap_or(&v))
+                .await
+            {
+                Ok(url) => (url, v_prefixed.as_ref().unwrap_or(&v)),
+                Err(err) if v_prefixed.is_some() => (
+                    self.fetch_url(&pkg, &v)
+                        .await
+                        .map_err(|e| err.wrap_err(e))?,
+                    &v,
+                ),
+                Err(err) => return Err(err),
+            };
+            let filename = url.split('/').next_back().unwrap().to_string();
+
+            // Store the asset URL in the tool version
+            let platform_key = self.get_platform_key();
+            tv.lock_platforms.entry(platform_key).or_default().url = Some(url.clone());
+
+            (url, v.to_string(), filename)
         };
-        let filename = url.split('/').next_back().unwrap();
-        self.download(ctx, &tv, &url, filename).await?;
-        self.verify(ctx, &mut tv, &pkg, &v, filename).await?;
-        self.install(ctx, &tv, &pkg, &v, filename)?;
+
+        self.download(ctx, &tv, &url, &filename).await?;
+        self.verify(ctx, &mut tv, &pkg, &v, &filename).await?;
+        self.install(ctx, &tv, &pkg, &v, &filename)?;
 
         Ok(tv)
     }
@@ -139,8 +167,9 @@ impl Backend for AquaBackend {
         let install_path = tv.install_path();
         let paths = cache
             .get_or_try_init_async(async || {
+                // TODO: align this logic with the one in `install_version_`
                 let pkg = AQUA_REGISTRY
-                    .package_with_version(&self.id, &tv.version)
+                    .package_with_version(&self.id, &[&tv.version])
                     .await?;
 
                 let srcs = self.srcs(&pkg, tv)?;
@@ -201,11 +230,51 @@ impl AquaBackend {
                     id
                 });
         }
+        let cache_path = ba.cache_path.clone();
         Self {
             id: id.to_string(),
             ba: Arc::new(ba),
+            version_tags_cache: CacheManagerBuilder::new(cache_path.join("version_tags.msgpack.z"))
+                .with_fresh_duration(Settings::get().fetch_remote_versions_cache())
+                .build(),
             bin_path_caches: Default::default(),
         }
+    }
+
+    async fn get_version_tags(&self) -> Result<&Vec<(String, String)>> {
+        self.version_tags_cache
+            .get_or_try_init_async(|| async {
+                let pkg = AQUA_REGISTRY.package(&self.id).await?;
+                let mut versions = Vec::new();
+                if !pkg.repo_owner.is_empty() && !pkg.repo_name.is_empty() {
+                    let tags = get_tags(&pkg).await?;
+                    for tag in tags.into_iter().rev() {
+                        let mut version = tag.as_str();
+                        match pkg.version_filter_ok(version) {
+                            Ok(true) => {}
+                            Ok(false) => continue,
+                            Err(e) => {
+                                warn!("[{}] aqua version filter error: {e}", self.ba());
+                                continue;
+                            }
+                        }
+                        let pkg = pkg.clone().with_version(&[version]);
+                        if let Some(prefix) = &pkg.version_prefix {
+                            if let Some(_v) = version.strip_prefix(prefix) {
+                                version = _v;
+                            } else {
+                                continue;
+                            }
+                        }
+                        version = version.strip_prefix('v').unwrap_or(version);
+                        versions.push((version.to_string(), tag));
+                    }
+                } else {
+                    warn!("no aqua registry found for {}", self.ba());
+                }
+                Ok(versions)
+            })
+            .await
     }
 
     async fn fetch_url(&self, pkg: &AquaPackage, v: &str) -> Result<String> {
@@ -219,7 +288,27 @@ impl AquaBackend {
                 HTTP.head(&url).await?;
                 Ok(url)
             }
-            ref t => bail!("unsupported aqua package type: {t}"),
+            AquaPackageType::Cargo => {
+                bail!(
+                    "package type `cargo` is not supported in the aqua backend. Use the cargo backend instead{}.",
+                    pkg.name
+                        .as_ref()
+                        .and_then(|s| s.strip_prefix("crates.io/"))
+                        .map(|name| format!(": cargo:{name}"))
+                        .unwrap_or_default()
+                )
+            }
+            AquaPackageType::GoInstall => {
+                bail!(
+                    "package type `go_install` is not supported in the aqua backend. Use the go backend instead{}.",
+                    pkg.path
+                        .as_ref()
+                        .map(|path| format!(": go:{path}"))
+                        .unwrap_or_else(|| {
+                            format!(": go:github.com/{}/{}", pkg.repo_owner, pkg.repo_name)
+                        })
+                )
+            }
         }
     }
 
@@ -285,7 +374,11 @@ impl AquaBackend {
     ) -> Result<()> {
         self.verify_slsa(ctx, tv, pkg, v, filename).await?;
         self.verify_minisign(ctx, tv, pkg, v, filename).await?;
-        if !tv.checksums.contains_key(filename) {
+
+        let download_path = tv.download_path();
+        let platform_key = self.get_platform_key();
+        let platform_info = tv.lock_platforms.entry(platform_key).or_default();
+        if platform_info.checksum.is_none() {
             if let Some(checksum) = &pkg.checksum {
                 if checksum.enabled() {
                     let url = match checksum._type() {
@@ -295,10 +388,10 @@ impl AquaBackend {
                         }
                         AquaChecksumType::Http => checksum.url(pkg, v)?,
                     };
-                    let checksum_path = tv.download_path().join(format!("{filename}.checksum"));
+                    let checksum_path = download_path.join(format!("{filename}.checksum"));
                     HTTP.download_file(&url, &checksum_path, Some(&ctx.pr))
                         .await?;
-                    self.cosign_checksums(ctx, pkg, v, tv, &checksum_path)
+                    self.cosign_checksums(ctx, pkg, v, tv, &checksum_path, &download_path)
                         .await?;
                     let mut checksum_file = file::read_to_string(&checksum_path)?;
                     if checksum.file_format() == "regexp" {
@@ -348,8 +441,11 @@ impl AquaBackend {
                         .map(|(c, _)| c)
                         .unwrap_or(checksum_file);
                     let checksum_str = checksum_str.split_whitespace().next().unwrap();
-                    let checksum = format!("{}:{}", checksum.algorithm(), checksum_str);
-                    tv.checksums.insert(filename.to_string(), checksum);
+                    let checksum_val = format!("{}:{}", checksum.algorithm(), checksum_str);
+                    // Now set the checksum after all borrows are done
+                    let platform_key = self.get_platform_key();
+                    let platform_info = tv.lock_platforms.get_mut(&platform_key).unwrap();
+                    platform_info.checksum = Some(checksum_val);
                 }
             }
         }
@@ -505,6 +601,7 @@ impl AquaBackend {
         v: &str,
         tv: &ToolVersion,
         checksum_path: &Path,
+        download_path: &Path,
     ) -> Result<()> {
         if !Settings::get().aqua.cosign {
             return Ok(());
@@ -542,6 +639,16 @@ impl AquaBackend {
                     let arg = certificate.arg(pkg, v)?;
                     if !arg.is_empty() {
                         cmd = cmd.arg("--certificate").arg(arg);
+                    }
+                }
+                if let Some(bundle) = &cosign.bundle {
+                    let url = bundle.arg(pkg, v)?;
+                    if !url.is_empty() {
+                        let filename = url.split('/').next_back().unwrap();
+                        let bundle_path = download_path.join(filename);
+                        HTTP.download_file(&url, &bundle_path, Some(&ctx.pr))
+                            .await?;
+                        cmd = cmd.arg("--bundle").arg(bundle_path);
                     }
                 }
                 for opt in cosign.opts(pkg, v)? {
@@ -604,7 +711,7 @@ impl AquaBackend {
         } else if format.starts_with("tar") {
             file::untar(&tarball_path, &install_path, &tar_opts)?;
         } else if format == "zip" {
-            file::unzip(&tarball_path, &install_path)?;
+            file::unzip(&tarball_path, &install_path, &Default::default())?;
         } else if format == "gz" {
             file::create_dir_all(&install_path)?;
             file::un_gz(&tarball_path, &bin_path)?;
@@ -612,6 +719,10 @@ impl AquaBackend {
         } else if format == "xz" {
             file::create_dir_all(&install_path)?;
             file::un_xz(&tarball_path, &bin_path)?;
+            file::make_executable(&bin_path)?;
+        } else if format == "zst" {
+            file::create_dir_all(&install_path)?;
+            file::un_zst(&tarball_path, &bin_path)?;
             file::make_executable(&bin_path)?;
         } else if format == "bz2" {
             file::create_dir_all(&install_path)?;
@@ -670,7 +781,7 @@ impl AquaBackend {
     }
 }
 
-async fn get_versions(pkg: &AquaPackage) -> Result<Vec<String>> {
+async fn get_tags(pkg: &AquaPackage) -> Result<Vec<String>> {
     if let Some("github_tag") = pkg.version_source.as_deref() {
         let versions = github::list_tags(&format!("{}/{}", pkg.repo_owner, pkg.repo_name)).await?;
         return Ok(versions);
@@ -687,6 +798,12 @@ async fn get_versions(pkg: &AquaPackage) -> Result<Vec<String>> {
 }
 
 fn validate(pkg: &AquaPackage) -> Result<()> {
+    if pkg.no_asset {
+        bail!("no asset released");
+    }
+    if let Some(message) = &pkg.error_message {
+        bail!("{}", message);
+    }
     let envs: HashSet<&str> = pkg.supported_envs.iter().map(|s| s.as_str()).collect();
     let os = os();
     let arch = arch();

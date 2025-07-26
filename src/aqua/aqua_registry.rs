@@ -80,6 +80,9 @@ pub struct AquaPackage {
     overrides: Vec<AquaOverride>,
     version_constraint: String,
     version_overrides: Vec<AquaPackage>,
+    pub no_asset: bool,
+    pub error_message: Option<String>,
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -100,6 +103,7 @@ pub struct AquaFile {
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum AquaChecksumAlgorithm {
+    Blake3,
     Sha1,
     Sha256,
     Sha512,
@@ -135,6 +139,7 @@ pub struct AquaCosign {
     pub signature: Option<AquaCosignSignature>,
     pub key: Option<AquaCosignSignature>,
     pub certificate: Option<AquaCosignSignature>,
+    pub bundle: Option<AquaCosignSignature>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     opts: Vec<String>,
 }
@@ -222,8 +227,8 @@ impl AquaRegistry {
         Ok(pkg)
     }
 
-    pub async fn package_with_version(&self, id: &str, v: &str) -> Result<AquaPackage> {
-        Ok(self.package(id).await?.with_version(v))
+    pub async fn package_with_version(&self, id: &str, versions: &[&str]) -> Result<AquaPackage> {
+        Ok(self.package(id).await?.with_version(versions))
     }
 
     async fn fetch_package_yaml(
@@ -278,8 +283,8 @@ fn fetch_latest_repo(repo: &Git) -> Result<()> {
 }
 
 impl AquaPackage {
-    pub fn with_version(mut self, v: &str) -> AquaPackage {
-        self = apply_override(self.clone(), self.version_override(v));
+    pub fn with_version(mut self, versions: &[&str]) -> AquaPackage {
+        self = apply_override(self.clone(), self.version_override(versions));
         if let Some(avo) = self.overrides.clone().into_iter().find(|o| {
             if let (Some(goos), Some(goarch)) = (&o.goos, &o.goarch) {
                 goos == aqua::os() && goarch == aqua::arch()
@@ -296,9 +301,12 @@ impl AquaPackage {
         self
     }
 
-    fn version_override(&self, v: &str) -> &AquaPackage {
-        let expr = self.expr_parser(v);
-        let ctx = self.expr_ctx(v);
+    // all versions must refer to the same logical version. e.g. ["v1.2.3", "1.2.3"]
+    fn version_override(&self, versions: &[&str]) -> &AquaPackage {
+        let expressions = versions
+            .iter()
+            .map(|v| (self.expr_parser(v), self.expr_ctx(v)))
+            .collect_vec();
         vec![self]
             .into_iter()
             .chain(self.version_overrides.iter())
@@ -306,11 +314,13 @@ impl AquaPackage {
                 if vo.version_constraint.is_empty() {
                     true
                 } else {
-                    expr.eval(&vo.version_constraint, &ctx)
-                        .map_err(|e| debug!("error parsing {}: {e}", vo.version_constraint))
-                        .unwrap_or(false.into())
-                        .as_bool()
-                        .unwrap()
+                    expressions.iter().any(|(expr, ctx)| {
+                        expr.eval(&vo.version_constraint, ctx)
+                            .map_err(|e| debug!("error parsing {}: {e}", vo.version_constraint))
+                            .unwrap_or(false.into())
+                            .as_bool()
+                            .unwrap()
+                    })
                 }
             })
             .unwrap_or(self)
@@ -451,7 +461,7 @@ impl AquaPackage {
         expr.run(program, &self.expr_ctx(v)).map_err(|e| eyre!(e))
     }
 
-    fn expr_parser(&self, v: &str) -> expr::Environment {
+    fn expr_parser(&self, v: &str) -> expr::Environment<'_> {
         let prefix = Regex::new(r"^[^0-9.]+").unwrap();
         let ver = versions::Versioning::new(prefix.replace(v, ""));
         let mut env = expr::Environment::new();
@@ -514,6 +524,7 @@ impl AquaFile {
         let asset = asset.strip_suffix(".tbz").unwrap_or(asset);
         let ctx = hashmap! {
             "AssetWithoutExt".to_string() => asset.to_string(),
+            "FileName".to_string() => self.name.to_string(),
         };
         self.src
             .as_ref()
@@ -581,6 +592,15 @@ fn apply_override(mut orig: AquaPackage, avo: &AquaPackage) -> AquaPackage {
         let mut minisign = orig.minisign.unwrap_or_else(|| avo_minisign.clone());
         minisign.merge(avo_minisign);
         orig.minisign = Some(minisign);
+    }
+    if avo.no_asset {
+        orig.no_asset = true;
+    }
+    if let Some(error_message) = avo.error_message.clone() {
+        orig.error_message = Some(error_message);
+    }
+    if let Some(path) = avo.path.clone() {
+        orig.path = Some(path);
     }
     orig
 }
@@ -679,6 +699,12 @@ impl AquaCosign {
                 self.certificate = Some(certificate.clone());
             }
             self.certificate.as_mut().unwrap().merge(certificate);
+        }
+        if let Some(bundle) = other.bundle.clone() {
+            if self.bundle.is_none() {
+                self.bundle = Some(bundle.clone());
+            }
+            self.bundle.as_mut().unwrap().merge(bundle);
         }
         if !other.opts.is_empty() {
             self.opts = other.opts.clone();
@@ -842,6 +868,9 @@ impl Default for AquaPackage {
             overrides: vec![],
             version_constraint: "".to_string(),
             version_overrides: vec![],
+            no_asset: false,
+            error_message: None,
+            path: None,
         }
     }
 }

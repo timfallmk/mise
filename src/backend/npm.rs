@@ -80,8 +80,6 @@ impl Backend for NPMBackend {
             CmdLineRunner::new("bun")
                 .arg("install")
                 .arg(format!("{}@{}", self.tool_name(), tv.version))
-                .arg("--cwd")
-                .arg(tv.install_path())
                 .arg("--global")
                 .arg("--trust")
                 .with_pr(&ctx.pr)
@@ -95,6 +93,7 @@ impl Backend for NPMBackend {
                         .list_paths(&ctx.config)
                         .await,
                 )?
+                .current_dir(tv.install_path())
                 .execute()?;
         } else {
             CmdLineRunner::new(NPM_PROGRAM)
@@ -123,7 +122,11 @@ impl Backend for NPMBackend {
         _config: &Arc<Config>,
         tv: &crate::toolset::ToolVersion,
     ) -> eyre::Result<Vec<std::path::PathBuf>> {
-        Ok(vec![tv.install_path()])
+        if Settings::get().npm.bun {
+            Ok(vec![tv.install_path().join("bin")])
+        } else {
+            Ok(vec![tv.install_path()])
+        }
     }
 }
 
