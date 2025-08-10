@@ -371,6 +371,37 @@ cmd generate subcommand_required=#true help="[experimental] Generate files for v
             arg <DIR>
         }
     }
+    cmd tool-stub help="[experimental] Generate a tool stub for HTTP-based tools" {
+        long_help "[experimental] Generate a tool stub for HTTP-based tools\n\nThis command generates tool stubs that can automatically download and execute\ntools from HTTP URLs. It can detect checksums, file sizes, and binary paths\nautomatically by downloading and analyzing the tool.\n\nWhen generating stubs with platform-specific URLs, the command will append new\nplatforms to existing stub files rather than overwriting them. This allows you\nto incrementally build cross-platform tool stubs."
+        after_long_help "Examples:\n\n    Generate a tool stub for a single URL:\n    $ mise generate tool-stub ./bin/gh --url \"https://github.com/cli/cli/releases/download/v2.336.0/gh_2.336.0_linux_amd64.tar.gz\"\n\n    Generate a tool stub with platform-specific URLs:\n    $ mise generate tool-stub ./bin/rg \\\n        --platform-url linux-x64:https://github.com/BurntSushi/ripgrep/releases/download/14.0.3/ripgrep-14.0.3-x86_64-unknown-linux-musl.tar.gz \\\n        --platform-url darwin-arm64:https://github.com/BurntSushi/ripgrep/releases/download/14.0.3/ripgrep-14.0.3-aarch64-apple-darwin.tar.gz\n\n    Append additional platforms to an existing stub:\n    $ mise generate tool-stub ./bin/rg \\\n        --platform-url linux-x64:https://example.com/rg-linux.tar.gz\n    $ mise generate tool-stub ./bin/rg \\\n        --platform-url darwin-arm64:https://example.com/rg-darwin.tar.gz\n    # The stub now contains both platforms\n\n    Use auto-detection for platform from URL:\n    $ mise generate tool-stub ./bin/node \\\n        --platform-url https://nodejs.org/dist/v22.17.1/node-v22.17.1-darwin-arm64.tar.gz\n    # Platform 'macos-arm64' will be auto-detected from the URL\n\n    Generate with platform-specific binary paths:\n    $ mise generate tool-stub ./bin/tool \\\n        --platform-url linux-x64:https://example.com/tool-linux.tar.gz \\\n        --platform-url windows-x64:https://example.com/tool-windows.zip \\\n        --platform-bin windows-x64:tool.exe\n\n    Generate without downloading (faster):\n    $ mise generate tool-stub ./bin/tool --url \"https://example.com/tool.tar.gz\" --skip-download\n\n    Fetch checksums for an existing stub:\n    $ mise generate tool-stub ./bin/jq --fetch\n    # This will read the existing stub and download files to fill in any missing checksums/sizes\n"
+        flag --version help="Version of the tool" {
+            arg <VERSION>
+        }
+        flag "-u --url" help="URL for downloading the tool" {
+            long_help "URL for downloading the tool\n\nExample: https://github.com/owner/repo/releases/download/v2.0.0/tool-linux-x64.tar.gz"
+            arg <URL>
+        }
+        flag --platform-url help="Platform-specific URLs in the format platform:url or just url (auto-detect platform)" var=#true {
+            long_help "Platform-specific URLs in the format platform:url or just url (auto-detect platform)\n\nWhen the output file already exists, new platforms will be appended to the existing platforms table. Existing platform URLs will be updated if specified again.\n\nIf only a URL is provided (without platform:), the platform will be automatically detected from the URL filename.\n\nExamples: --platform-url linux-x64:https://... --platform-url https://nodejs.org/dist/v22.17.1/node-v22.17.1-darwin-arm64.tar.gz"
+            arg <PLATFORM_URL>
+        }
+        flag --platform-bin help="Platform-specific binary paths in the format platform:path" var=#true {
+            long_help "Platform-specific binary paths in the format platform:path\n\nExamples: --platform-bin windows-x64:tool.exe --platform-bin linux-x64:bin/tool"
+            arg <PLATFORM_BIN>
+        }
+        flag "-b --bin" help="Binary path within the extracted archive" {
+            long_help "Binary path within the extracted archive\n\nIf not specified and the archive is downloaded, will auto-detect the most likely binary"
+            arg <BIN>
+        }
+        flag --skip-download help="Skip downloading for checksum and binary path detection (faster but less informative)"
+        flag --fetch help="Fetch checksums and sizes for an existing tool stub file" {
+            long_help "Fetch checksums and sizes for an existing tool stub file\n\nThis reads an existing stub file and fills in any missing checksum/size fields by downloading the files. URLs must already be present in the stub."
+        }
+        flag --http help="HTTP backend type to use" {
+            arg <HTTP>
+        }
+        arg <OUTPUT> help="Output file path for the tool stub"
+    }
 }
 cmd global hide=#true help="Sets/gets the global tool version(s)" {
     long_help "Sets/gets the global tool version(s)\n\nDisplays the contents of global config after writing.\nThe file is `$HOME/.config/mise/config.toml` by default. It can be changed with `$MISE_GLOBAL_CONFIG_FILE`.\nIf `$MISE_GLOBAL_CONFIG_FILE` is set to anything that ends in `.toml`, it will be parsed as `mise.toml`.\nOtherwise, it will be parsed as a `.tool-versions` file.\n\nUse MISE_ASDF_COMPAT=1 to default the global config to ~/.tool-versions\n\nUse `mise local` to set a tool version locally in the current directory."
@@ -496,6 +527,10 @@ cmd ls-remote help="List runtime versions available for install." {
     flag --all help="Show all installed plugins and versions"
     arg "[TOOL@VERSION]" help="Tool to get versions for" required=#false
     arg "[PREFIX]" help="The version prefix to use when querying the latest version\nsame as the first argument after the \"@\"" required=#false
+}
+cmd mcp help="[experimental] Run Model Context Protocol (MCP) server" {
+    long_help "[experimental] Run Model Context Protocol (MCP) server\n\nThis command starts an MCP server that exposes mise functionality\nto AI assistants over stdin/stdout using JSON-RPC protocol.\n\nThe MCP server provides access to:\n- Installed and available tools\n- Task definitions and execution\n- Environment variables\n- Configuration information\n\nResources available:\n- mise://tools - List all tools (use ?include_inactive=true to include inactive tools)\n- mise://tasks - List all tasks with their configurations\n- mise://env - List all environment variables\n- mise://config - Show configuration files and project root\n\nNote: This is primarily intended for integration with AI assistants like Claude,\nCursor, or other tools that support the Model Context Protocol."
+    after_long_help "Examples:\n\n    # Start the MCP server (typically used by AI assistant tools)\n    $ mise mcp\n\n    # Example integration with Claude Desktop (add to claude_desktop_config.json):\n    {\n      \"mcpServers\": {\n        \"mise\": {\n          \"command\": \"mise\",\n          \"args\": [\"mcp\"]\n        }\n      }\n    }\n\n    # Interactive testing with JSON-RPC commands:\n    $ echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}' | mise mcp\n\n    # Resources you can query:\n    - mise://tools - List active tools\n    - mise://tools?include_inactive=true - List all installed tools\n    - mise://tasks - List all tasks\n    - mise://env - List environment variables\n    - mise://config - Show configuration info\n"
 }
 cmd outdated help="Shows outdated tool versions" {
     long_help "Shows outdated tool versions\n\nSee `mise upgrade` to upgrade these versions."
@@ -907,7 +942,7 @@ cmd test-tool help="Test a tool installs and executes" {
         arg <JOBS>
     }
     flag --raw help="Directly pipe stdin/stdout/stderr from plugin to user Sets --jobs=1"
-    arg "[TOOL]" help="Tool name to test" required=#false
+    arg "[TOOLS]…" help="Tool(s) to test" required=#false var=#true
 }
 cmd tool help="Gets information about a tool" {
     after_long_help "Examples:\n\n    $ mise tool node\n    Backend:            core\n    Installed Versions: 20.0.0 22.0.0\n    Active Version:     20.0.0\n    Requested Version:  20\n    Config Source:      ~/.config/mise/mise.toml\n    Tool Options:       [none]\n"
@@ -920,6 +955,11 @@ cmd tool help="Gets information about a tool" {
     flag --config-source help="Only show config source"
     flag --tool-options help="Only show tool options"
     arg <TOOL> help="Tool name to get information about"
+}
+cmd tool-stub help="Execute a tool stub" {
+    long_help "Execute a tool stub\n\nTool stubs are executable files containing TOML configuration that specify which tool to run and how to run it. They provide a convenient way to create portable, self-contained executables that automatically manage tool installation and execution.\n\nA tool stub consists of: - A shebang line: #!/usr/bin/env -S mise tool-stub - TOML configuration specifying the tool, version, and options - Optional comments describing the tool's purpose\n\nExample stub file: #!/usr/bin/env -S mise tool-stub # Node.js v20 development environment\n\ntool = \"node\" version = \"20.0.0\" bin = \"node\"\n\nThe stub will automatically install the specified tool version if missing and execute it with any arguments passed to the stub.\n\nFor more information, see: https://mise.jdx.dev/dev-tools/tool-stubs.html"
+    arg <FILE> help="Path to the TOML tool stub file to execute" help_long="Path to the TOML tool stub file to execute\n\nThe stub file must contain TOML configuration specifying the tool and version to run. At minimum, it should specify a 'version' field. Other common fields include 'tool', 'bin', and backend-specific options."
+    arg "[ARGS]…" help="Arguments to pass to the tool" help_long="Arguments to pass to the tool\n\nAll arguments after the stub file path will be forwarded to the underlying tool. Use '--' to separate mise arguments from tool arguments if needed." required=#false double_dash=automatic var=#true
 }
 cmd trust help="Marks a config file as trusted" {
     long_help "Marks a config file as trusted\n\nThis means mise will parse the file with potentially dangerous\nfeatures enabled.\n\nThis includes:\n- environment variables\n- templates\n- `path:` plugin versions"

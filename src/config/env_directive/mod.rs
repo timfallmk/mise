@@ -3,7 +3,6 @@ use crate::dirs;
 use crate::env;
 use crate::env_diff::EnvMap;
 use crate::file::display_path;
-use crate::path_env::PathEnv;
 use crate::tera::{get_tera, tera_exec};
 use eyre::{Context, eyre};
 use indexmap::IndexMap;
@@ -22,13 +21,13 @@ mod path;
 mod source;
 mod venv;
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct EnvDirectiveOptions {
     pub(crate) tools: bool,
     pub(crate) redact: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum EnvDirective {
     /// simple key/value pair
     Val(String, String, EnvDirectiveOptions),
@@ -82,9 +81,9 @@ impl Display for EnvDirective {
         match self {
             EnvDirective::Val(k, v, _) => write!(f, "{k}={v}"),
             EnvDirective::Rm(k, _) => write!(f, "unset {k}"),
-            EnvDirective::File(path, _) => write!(f, "dotenv {}", display_path(path)),
-            EnvDirective::Path(path, _) => write!(f, "path_add {}", display_path(path)),
-            EnvDirective::Source(path, _) => write!(f, "source {}", display_path(path)),
+            EnvDirective::File(path, _) => write!(f, "_.file = \"{}\"", display_path(path)),
+            EnvDirective::Path(path, _) => write!(f, "_.path = \"{}\"", display_path(path)),
+            EnvDirective::Source(path, _) => write!(f, "_.source = \"{}\"", display_path(path)),
             EnvDirective::Module(name, _, _) => write!(f, "module {name}"),
             EnvDirective::PythonVenv {
                 path,
@@ -122,12 +121,25 @@ pub struct EnvResults {
     pub env_paths: Vec<PathBuf>,
     pub env_scripts: Vec<PathBuf>,
     pub redactions: Vec<String>,
+    pub tool_add_paths: Vec<PathBuf>,
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone)]
+pub enum ToolsFilter {
+    ToolsOnly,
+    NonToolsOnly,
+    Both,
+}
+
+impl Default for ToolsFilter {
+    fn default() -> Self {
+        Self::NonToolsOnly
+    }
+}
+
 pub struct EnvResolveOptions {
     pub vars: bool,
-    pub tools: bool,
+    pub tools: ToolsFilter,
 }
 
 impl EnvResults {
@@ -151,6 +163,7 @@ impl EnvResults {
             env_paths: Vec::new(),
             env_scripts: Vec::new(),
             redactions: Vec::new(),
+            tool_add_paths: Vec::new(),
         };
         let normalize_path = |config_root: &Path, p: PathBuf| {
             let p = p.strip_prefix("./").unwrap_or(&p);
@@ -168,10 +181,17 @@ impl EnvResults {
         let input = input
             .iter()
             .fold(Vec::new(), |mut acc, (directive, source)| {
-                // remove directives that need tools if we're not processing tool directives, or vice versa
-                if directive.options().tools != resolve_opts.tools {
+                // Filter directives based on tools setting
+                let should_include = match &resolve_opts.tools {
+                    ToolsFilter::ToolsOnly => directive.options().tools,
+                    ToolsFilter::NonToolsOnly => !directive.options().tools,
+                    ToolsFilter::Both => true,
+                };
+
+                if !should_include {
                     return acc;
                 }
+
                 if let Some(d) = &last_python_venv {
                     if matches!(directive, EnvDirective::PythonVenv { .. }) && **d != *directive {
                         // skip venv directives if it's not the last one
@@ -241,10 +261,8 @@ impl EnvResults {
                 EnvDirective::Path(input_str, _opts) => {
                     let path = Self::path(&mut ctx, &mut tera, &mut r, &source, input_str).await?;
                     paths.push((path.clone(), source.clone()));
-                    let env_path = env.get(&*env::PATH_KEY).cloned().unwrap_or_default().0;
-                    let mut env_path: PathEnv = env_path.parse()?;
-                    env_path.add(path);
-                    env.insert(env::PATH_KEY.to_string(), (env_path.to_string(), None));
+                    // Don't modify PATH in env - just add to env_paths
+                    // This allows consumers to control PATH ordering
                 }
                 EnvDirective::File(input, _opts) => {
                     let files = Self::file(
@@ -267,7 +285,6 @@ impl EnvResults {
                                 if redact {
                                     r.redactions.push(k.clone());
                                 }
-                                r.env_remove.insert(k.clone());
                                 env.insert(k, (v, Some(f.clone())));
                             }
                         }
@@ -294,7 +311,6 @@ impl EnvResults {
                                 if redact {
                                     r.redactions.push(k.clone());
                                 }
-                                r.env_remove.insert(k.clone());
                                 env.insert(k, (v, Some(f.clone())));
                             }
                         }
@@ -388,6 +404,7 @@ impl EnvResults {
             && self.env_files.is_empty()
             && self.env_paths.is_empty()
             && self.env_scripts.is_empty()
+            && self.tool_add_paths.is_empty()
     }
 }
 
@@ -411,6 +428,9 @@ impl Debug for EnvResults {
         }
         if !self.env_scripts.is_empty() {
             ds.field("env_scripts", &self.env_scripts);
+        }
+        if !self.tool_add_paths.is_empty() {
+            ds.field("tool_add_paths", &self.tool_add_paths);
         }
         ds.finish()
     }

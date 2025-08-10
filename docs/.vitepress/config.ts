@@ -60,6 +60,7 @@ export default withMermaid(
             },
             { text: "Shims", link: "/dev-tools/shims" },
             { text: "Aliases", link: "/dev-tools/aliases" },
+            { text: "Tool Stubs", link: "/dev-tools/tool-stubs" },
             { text: "Registry", link: "/registry" },
             { text: "mise.lock Lockfile", link: "/dev-tools/mise-lock" },
             {
@@ -180,6 +181,7 @@ export default withMermaid(
             { text: "Architecture", link: "/architecture" },
             { text: "Paranoid", link: "/paranoid" },
             { text: "Templates", link: "/templates" },
+            { text: "Model Context Protocol", link: "/mcp" },
             { text: "How I Use mise", link: "/how-i-use-mise" },
             { text: "Directory Structure", link: "/directories" },
             { text: "Cache Behavior", link: "/cache-behavior" },

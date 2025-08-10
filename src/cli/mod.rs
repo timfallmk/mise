@@ -39,6 +39,7 @@ mod local;
 mod lock;
 mod ls;
 mod ls_remote;
+mod mcp;
 mod outdated;
 mod plugins;
 mod prune;
@@ -59,6 +60,7 @@ mod sync;
 mod tasks;
 mod test_tool;
 mod tool;
+pub mod tool_stub;
 mod trust;
 mod uninstall;
 mod unset;
@@ -217,6 +219,7 @@ pub enum Commands {
     Lock(lock::Lock),
     Ls(ls::Ls),
     LsRemote(ls_remote::LsRemote),
+    Mcp(mcp::Mcp),
     Outdated(outdated::Outdated),
     Plugins(plugins::Plugins),
     Prune(prune::Prune),
@@ -233,6 +236,7 @@ pub enum Commands {
     Tasks(tasks::Tasks),
     TestTool(test_tool::TestTool),
     Tool(tool::Tool),
+    ToolStub(tool_stub::ToolStub),
     Trust(trust::Trust),
     Uninstall(uninstall::Uninstall),
     Unset(unset::Unset),
@@ -284,6 +288,7 @@ impl Commands {
             Self::Lock(cmd) => cmd.run().await,
             Self::Ls(cmd) => cmd.run().await,
             Self::LsRemote(cmd) => cmd.run().await,
+            Self::Mcp(cmd) => cmd.run().await,
             Self::Outdated(cmd) => cmd.run().await,
             Self::Plugins(cmd) => cmd.run().await,
             Self::Prune(cmd) => cmd.run().await,
@@ -300,6 +305,7 @@ impl Commands {
             Self::Tasks(cmd) => cmd.run().await,
             Self::TestTool(cmd) => cmd.run().await,
             Self::Tool(cmd) => cmd.run().await,
+            Self::ToolStub(cmd) => cmd.run().await,
             Self::Trust(cmd) => cmd.run().await,
             Self::Uninstall(cmd) => cmd.run().await,
             Self::Unset(cmd) => cmd.run().await,
@@ -324,6 +330,9 @@ impl Commands {
 impl Cli {
     pub async fn run(args: &Vec<String>) -> Result<()> {
         crate::env::ARGS.write().unwrap().clone_from(args);
+        if *crate::env::MISE_TOOL_STUB && args.len() >= 2 {
+            tool_stub::short_circuit_stub(&args[2..]).await?;
+        }
         measure!("logger", { logger::init() });
         measure!("handle_shim", { shims::handle_shim().await })?;
         ctrlc::init();
