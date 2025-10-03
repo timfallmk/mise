@@ -565,16 +565,18 @@ pub struct ToolStub {
 impl ToolStub {
     pub async fn run(self) -> Result<()> {
         // Ignore clap parsing and use raw args from env::ARGS to avoid version flag interception
-        let global_args = crate::env::ARGS.read().unwrap();
         let file_str = self.file.to_string_lossy();
 
         // Find our file in the global args and take everything after it
-        let args =
-            if let Some(file_pos) = global_args.iter().position(|arg| arg == file_str.as_ref()) {
+        let args = {
+            let global_args = crate::env::ARGS.read().unwrap();
+            let file_str_ref: &str = file_str.as_ref();
+            if let Some(file_pos) = global_args.iter().position(|arg| arg == file_str_ref) {
                 global_args.get(file_pos + 1..).unwrap_or(&[]).to_vec()
             } else {
                 vec![]
-            };
+            }
+        }; // Drop the lock before await
 
         let stub = ToolStubFile::from_file(&self.file)?;
         let mut config = Config::get().await?;

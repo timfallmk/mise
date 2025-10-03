@@ -14,8 +14,11 @@ file, mise will automatically add itself to `PATH`.
 
 ```sh
 curl https://mise.run | sh
+```
 
-# or with options
+or with options
+
+```sh
 curl https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh
 ```
 
@@ -43,6 +46,7 @@ curl https://mise.run/fish | sh
 :::
 
 These shell-specific installers will:
+
 - Install mise using the same logic as the main installer
 - Automatically detect your shell's configuration file
 - Add the activation line if it's not already present
@@ -160,6 +164,14 @@ dnf copr enable jdxcode/mise
 dnf install mise
 ```
 
+### Snap (Linux, currently in beta)
+
+```sh
+sudo snap install mise --beta
+```
+
+[snapcraft.io page](https://snapcraft.io/mise)
+
 ### Docker
 
 ```sh
@@ -220,6 +232,14 @@ systems.
 yum install -y yum-utils
 yum-config-manager --add-repo https://mise.jdx.dev/rpm/mise.repo
 yum install -y mise
+```
+
+### zypper
+
+```sh
+sudo wget https://mise.jdx.dev/rpm/mise.repo -O /etc/zypp/repos.d/mise.repo
+sudo zypper refresh
+sudo zypper install mise
 ```
 
 ### Windows - Scoop
@@ -381,7 +401,7 @@ Then, run the following commands to install the completion script for your shell
 
 ```sh [bash]
 # This requires bash-completion to be installed
-mkdir -p ~/.local/share/bash-completion/
+mkdir -p ~/.local/share/bash-completion/completions/
 mise completion bash --include-bash-completion-lib > ~/.local/share/bash-completion/completions/mise
 ```
 

@@ -111,7 +111,6 @@ echo ""
 git config --global user.name "$MAINTAINER_NAME"
 git config --global user.email "$MAINTAINER_EMAIL"
 git config --global --add safe.directory "$REPO_ROOT"
-git config --global --add safe.directory "$REPO_ROOT/aqua-registry"
 
 # Set up COPR configuration if not in dry-run mode
 if [ "$DRY_RUN" != "true" ]; then
@@ -141,19 +140,8 @@ echo "%_tmppath %{_topdir}/tmp" >>~/.rpmmacros
 cd "$BUILD_DIR"
 
 echo "=== Creating Source Tarball ==="
-# Create original source tarball with submodules
+# Create original source tarball
 git -C "$REPO_ROOT" archive --format=tar --prefix="${PACKAGE_NAME}-${VERSION}/" HEAD >"SOURCES/${PACKAGE_NAME}-${VERSION}.tar"
-
-# Add aqua-registry submodule to the tarball
-echo "Adding aqua-registry submodule..."
-# Create a temporary tar file for the submodule
-git -C "$REPO_ROOT/aqua-registry" archive --format=tar --prefix="${PACKAGE_NAME}-${VERSION}/aqua-registry/" HEAD >"SOURCES/aqua-registry-temp.tar"
-
-# Use tar's --concatenate option to properly combine the archives
-tar --concatenate --file="SOURCES/${PACKAGE_NAME}-${VERSION}.tar" "SOURCES/aqua-registry-temp.tar"
-
-# Clean up temporary file
-rm "SOURCES/aqua-registry-temp.tar"
 
 # Compress the tarball
 gzip "SOURCES/${PACKAGE_NAME}-${VERSION}.tar"
@@ -247,7 +235,9 @@ cp completions/mise.fish %{buildroot}%{_datadir}/fish/vendor_completions.d/
 
 # Disable self-update for package manager installations
 mkdir -p %{buildroot}%{_libdir}/mise
-touch %{buildroot}%{_libdir}/mise/.disable-self-update
+cat > %{buildroot}%{_libdir}/mise/mise-self-update-instructions.toml <<'TOML'
+message = "To update mise from COPR, run:\n\n  sudo dnf upgrade mise\n"
+TOML
 
 %files
 %license LICENSE
@@ -257,7 +247,7 @@ touch %{buildroot}%{_libdir}/mise/.disable-self-update
 %{_datadir}/bash-completion/completions/mise
 %{_datadir}/zsh/site-functions/_mise
 %{_datadir}/fish/vendor_completions.d/mise.fish
-%{_libdir}/mise/.disable-self-update
+%{_libdir}/mise/mise-self-update-instructions.toml
 
 %changelog
 * __CHANGELOG_DATE__ __MAINTAINER_NAME__ <__MAINTAINER_EMAIL__> - %{version}-1

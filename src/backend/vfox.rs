@@ -4,7 +4,7 @@ use eyre::WrapErr;
 use heck::ToKebabCase;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use tokio::sync::RwLock;
@@ -153,6 +153,25 @@ impl Backend for VfoxBackend {
     fn plugin(&self) -> Option<&PluginEnum> {
         Some(&self.plugin_enum)
     }
+
+    async fn idiomatic_filenames(&self) -> eyre::Result<Vec<String>> {
+        let (vfox, _log_rx) = self.plugin.vfox();
+
+        let metadata = vfox.metadata(&self.pathname).await?;
+        Ok(metadata.legacy_filenames)
+    }
+
+    async fn parse_idiomatic_file(&self, path: &Path) -> eyre::Result<String> {
+        let (vfox, _log_rx) = self.plugin.vfox();
+        let response = vfox.parse_legacy_file(&self.pathname, path).await?;
+        response.version.ok_or_else(|| {
+            eyre::eyre!(
+                "Version for {} not found in '{}'",
+                self.pathname,
+                path.display()
+            )
+        })
+    }
 }
 
 impl VfoxBackend {
@@ -279,7 +298,7 @@ impl VfoxBackend {
 
     async fn ensure_plugin_installed(&self, config: &Arc<Config>) -> eyre::Result<()> {
         self.plugin
-            .ensure_installed(config, &MultiProgressReport::get(), false)
+            .ensure_installed(config, &MultiProgressReport::get(), false, false)
             .await
     }
 }

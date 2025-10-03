@@ -130,18 +130,21 @@ impl Plugin for VfoxPlugin {
         _config: &Arc<Config>,
         mpr: &MultiProgressReport,
         _force: bool,
+        dry_run: bool,
     ) -> Result<()> {
         if !self.plugin_path.exists() {
             let url = self.get_repo_url()?;
             trace!("Cloning vfox plugin: {url}");
-            let pr = mpr.add(&format!("clone vfox plugin {url}"));
-            self.repo()
-                .clone(url.as_str(), CloneOptions::default().pr(&pr))?;
+            let pr = mpr.add_with_options(&format!("clone vfox plugin {url}"), dry_run);
+            if !dry_run {
+                self.repo()
+                    .clone(url.as_str(), CloneOptions::default().pr(pr.as_ref()))?;
+            }
         }
         Ok(())
     }
 
-    async fn update(&self, pr: &Box<dyn SingleReport>, gitref: Option<String>) -> Result<()> {
+    async fn update(&self, pr: &dyn SingleReport, gitref: Option<String>) -> Result<()> {
         let plugin_path = self.plugin_path.to_path_buf();
         if plugin_path.is_symlink() {
             warn!(
@@ -169,7 +172,7 @@ impl Plugin for VfoxPlugin {
         Ok(())
     }
 
-    async fn uninstall(&self, pr: &Box<dyn SingleReport>) -> Result<()> {
+    async fn uninstall(&self, pr: &dyn SingleReport) -> Result<()> {
         if !self.is_installed() {
             return Ok(());
         }
@@ -193,7 +196,7 @@ impl Plugin for VfoxPlugin {
         Ok(())
     }
 
-    async fn install(&self, _config: &Arc<Config>, pr: &Box<dyn SingleReport>) -> eyre::Result<()> {
+    async fn install(&self, _config: &Arc<Config>, pr: &dyn SingleReport) -> eyre::Result<()> {
         let repository = self.get_repo_url()?;
         let (repo_url, repo_ref) = Git::split_url_and_ref(repository.as_str());
         debug!("vfox_plugin[{}]:install {:?}", self.name, repository);

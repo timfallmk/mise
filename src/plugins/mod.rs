@@ -112,11 +112,7 @@ impl PluginEnum {
         }
     }
 
-    pub async fn update(
-        &self,
-        pr: &Box<dyn SingleReport>,
-        gitref: Option<String>,
-    ) -> eyre::Result<()> {
+    pub async fn update(&self, pr: &dyn SingleReport, gitref: Option<String>) -> eyre::Result<()> {
         match self {
             PluginEnum::Asdf(plugin) => plugin.update(pr, gitref).await,
             PluginEnum::Vfox(plugin) => plugin.update(pr, gitref).await,
@@ -124,7 +120,7 @@ impl PluginEnum {
         }
     }
 
-    pub async fn uninstall(&self, pr: &Box<dyn SingleReport>) -> eyre::Result<()> {
+    pub async fn uninstall(&self, pr: &dyn SingleReport) -> eyre::Result<()> {
         match self {
             PluginEnum::Asdf(plugin) => plugin.uninstall(pr).await,
             PluginEnum::Vfox(plugin) => plugin.uninstall(pr).await,
@@ -132,11 +128,7 @@ impl PluginEnum {
         }
     }
 
-    pub async fn install(
-        &self,
-        config: &Arc<Config>,
-        pr: &Box<dyn SingleReport>,
-    ) -> eyre::Result<()> {
+    pub async fn install(&self, config: &Arc<Config>, pr: &dyn SingleReport) -> eyre::Result<()> {
         match self {
             PluginEnum::Asdf(plugin) => plugin.install(config, pr).await,
             PluginEnum::Vfox(plugin) => plugin.install(config, pr).await,
@@ -165,11 +157,14 @@ impl PluginEnum {
         config: &Arc<Config>,
         mpr: &MultiProgressReport,
         force: bool,
+        dry_run: bool,
     ) -> eyre::Result<()> {
         match self {
-            PluginEnum::Asdf(plugin) => plugin.ensure_installed(config, mpr, force).await,
-            PluginEnum::Vfox(plugin) => plugin.ensure_installed(config, mpr, force).await,
-            PluginEnum::VfoxBackend(plugin) => plugin.ensure_installed(config, mpr, force).await,
+            PluginEnum::Asdf(plugin) => plugin.ensure_installed(config, mpr, force, dry_run).await,
+            PluginEnum::Vfox(plugin) => plugin.ensure_installed(config, mpr, force, dry_run).await,
+            PluginEnum::VfoxBackend(plugin) => {
+                plugin.ensure_installed(config, mpr, force, dry_run).await
+            }
         }
     }
 }
@@ -251,24 +246,17 @@ pub trait Plugin: Debug + Send {
         _config: &Arc<Config>,
         _mpr: &MultiProgressReport,
         _force: bool,
+        _dry_run: bool,
     ) -> eyre::Result<()> {
         Ok(())
     }
-    async fn update(
-        &self,
-        _pr: &Box<dyn SingleReport>,
-        _gitref: Option<String>,
-    ) -> eyre::Result<()> {
+    async fn update(&self, _pr: &dyn SingleReport, _gitref: Option<String>) -> eyre::Result<()> {
         Ok(())
     }
-    async fn uninstall(&self, _pr: &Box<dyn SingleReport>) -> eyre::Result<()> {
+    async fn uninstall(&self, _pr: &dyn SingleReport) -> eyre::Result<()> {
         Ok(())
     }
-    async fn install(
-        &self,
-        _config: &Arc<Config>,
-        _pr: &Box<dyn SingleReport>,
-    ) -> eyre::Result<()> {
+    async fn install(&self, _config: &Arc<Config>, _pr: &dyn SingleReport) -> eyre::Result<()> {
         Ok(())
     }
     fn external_commands(&self) -> eyre::Result<Vec<Command>> {

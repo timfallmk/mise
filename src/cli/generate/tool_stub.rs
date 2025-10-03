@@ -188,11 +188,12 @@ impl ToolStub {
                 }
                 doc["size"] = size_item;
 
-                if self.bin.is_none() && bin_path.is_some() {
-                    let detected_bin = bin_path.as_ref().unwrap();
-                    // Only set bin if it's different from the stub filename
-                    if detected_bin != stub_filename {
-                        doc["bin"] = toml_edit::value(detected_bin);
+                if self.bin.is_none() {
+                    if let Some(detected_bin) = bin_path.as_ref() {
+                        // Only set bin if it's different from the stub filename
+                        if detected_bin != stub_filename {
+                            doc["bin"] = toml_edit::value(detected_bin);
+                        }
                     }
                 }
             }
@@ -257,13 +258,11 @@ impl ToolStub {
                     }
 
                     // Set bin path if not explicitly provided and we detected one different from stub filename
-                    if !explicit_platform_bins.contains_key(&platform)
-                        && self.bin.is_none()
-                        && bin_path.is_some()
-                    {
-                        let detected_bin = bin_path.as_ref().unwrap();
-                        if detected_bin != stub_filename {
-                            platform_table["bin"] = toml_edit::value(detected_bin);
+                    if !explicit_platform_bins.contains_key(&platform) && self.bin.is_none() {
+                        if let Some(detected_bin) = bin_path.as_ref() {
+                            if detected_bin != stub_filename {
+                                platform_table["bin"] = toml_edit::value(detected_bin);
+                            }
                         }
                     }
                 }
@@ -370,7 +369,8 @@ impl ToolStub {
         let pr = mpr.add(&format!("download {filename}"));
 
         // Download using mise's HTTP client
-        HTTP.download_file(url, &archive_path, Some(&pr)).await?;
+        HTTP.download_file(url, &archive_path, Some(pr.as_ref()))
+            .await?;
 
         // Read the file to calculate checksum and size
         let bytes = file::read(&archive_path)?;
@@ -382,7 +382,7 @@ impl ToolStub {
             // Update progress message for extraction and reuse the same progress reporter
             pr.set_message(format!("extract {filename}"));
             match self
-                .extract_and_find_binary(&archive_path, &temp_dir, &filename, &pr)
+                .extract_and_find_binary(&archive_path, &temp_dir, &filename, pr.as_ref())
                 .await
             {
                 Ok(path) => {
@@ -408,7 +408,7 @@ impl ToolStub {
         archive_path: &std::path::Path,
         temp_dir: &tempfile::TempDir,
         _filename: &str,
-        pr: &Box<dyn SingleReport>,
+        pr: &dyn SingleReport,
     ) -> Result<String> {
         // Try to extract and find executables
         let extracted_dir = temp_dir.path().join("extracted");
@@ -419,6 +419,7 @@ impl ToolStub {
             format: TarFormat::Auto,
             strip_components: 0,
             pr: Some(pr),
+            ..Default::default()
         };
         file::untar(archive_path, &extracted_dir, &tar_opts)?;
 
@@ -445,7 +446,11 @@ impl ToolStub {
         if will_strip {
             let path = std::path::Path::new(&selected_exe);
             if let Ok(stripped) = path.strip_prefix(path.components().next().unwrap()) {
-                return Ok(stripped.to_string_lossy().to_string());
+                let stripped_str = stripped.to_string_lossy().to_string();
+                // Don't return empty string if stripping removed everything
+                if !stripped_str.is_empty() {
+                    return Ok(stripped_str);
+                }
             }
         }
 
